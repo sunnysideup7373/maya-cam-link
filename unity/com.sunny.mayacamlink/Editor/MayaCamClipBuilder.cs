@@ -24,7 +24,7 @@ namespace MayaCamLink.Editor
             float fps = Mathf.Max(1f, p.fps);
 
             // ---- clip asset ----
-            string folder = MayaCamLinkProcessor.EnsureFolder(MayaCamLinkSettings.OutputFolder + "/Clips");
+            string folder = MayaCamLinkProcessor.EnsureFolder(MayaCamLinkSettings.ClipFolder);
             string safe = MayaCamLinkProcessor.Sanitize(p.camera);
             string path = $"{folder}/{MayaCamLinkProcessor.SceneName()}_{safe}.anim";
             var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);

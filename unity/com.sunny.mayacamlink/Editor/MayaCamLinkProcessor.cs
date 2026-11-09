@@ -172,8 +172,10 @@ namespace MayaCamLink.Editor
             LastResH = p.resH;
             var rig = FindRig(p.camera, true);
             if (!rig) return;
-            var dir = FindDirector(true);
-            var clip = MayaCamClipBuilder.Build(p, rig, dir);
+            // 「Timeline を作成」が OFF の時は AnimationClip だけ作成 (Timeline には触らない)
+            bool makeTimeline = MayaCamLinkSettings.CreateTimeline;
+            var dir = FindDirector(makeTimeline);
+            var clip = MayaCamClipBuilder.Build(p, rig, makeTimeline ? dir : null);
             LastBakeInfo = $"{p.camera}  {p.frames.Length} f  @{p.fps:0.###}fps  → {AssetDatabase.GetAssetPath(clip)}   ({DateTime.Now:HH:mm:ss})";
 
             // ライブ状態は引き続き有効 (Maya の現在フレームの値)。再評価してから上書き
@@ -365,7 +367,7 @@ namespace MayaCamLink.Editor
             }
             if (!(dir.playableAsset is TimelineAsset))
             {
-                string folder = EnsureFolder(MayaCamLinkSettings.OutputFolder);
+                string folder = EnsureFolder(MayaCamLinkSettings.TimelineFolder);
                 string path = $"{folder}/{SceneName()}_MayaCamLink.playable";
                 var tl = AssetDatabase.LoadAssetAtPath<TimelineAsset>(path);
                 if (!tl)

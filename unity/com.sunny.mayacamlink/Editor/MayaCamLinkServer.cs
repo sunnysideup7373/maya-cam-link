@@ -155,6 +155,12 @@ namespace MayaCamLink.Editor
             get => EditorPrefs.GetBool(P + "AcceptBake", true);
             set => EditorPrefs.SetBool(P + "AcceptBake", value);
         }
+        /// <summary>false: キーを受け取っても AnimationClip だけ作成し、Timeline は作らない</summary>
+        public static bool CreateTimeline
+        {
+            get => EditorPrefs.GetBool(P + "CreateTimeline", true);
+            set => EditorPrefs.SetBool(P + "CreateTimeline", value);
+        }
         public static bool AutoCreateRig
         {
             get => EditorPrefs.GetBool(P + "AutoCreateRig", true);
@@ -169,6 +175,26 @@ namespace MayaCamLink.Editor
         {
             get => EditorPrefs.GetString(P + "OutputFolder", "Assets/MayaCamLink");
             set => EditorPrefs.SetString(P + "OutputFolder", value);
+        }
+        /// <summary>カメラの AnimationClip (.anim) の保存先。空なら 出力フォルダ/Clips</summary>
+        public static string ClipFolder
+        {
+            get
+            {
+                var v = EditorPrefs.GetString(P + "ClipFolder", "");
+                return string.IsNullOrWhiteSpace(v) ? OutputFolder + "/Clips" : v;
+            }
+            set => EditorPrefs.SetString(P + "ClipFolder", value);
+        }
+        /// <summary>Timeline (.playable) の保存先。空なら 出力フォルダ</summary>
+        public static string TimelineFolder
+        {
+            get
+            {
+                var v = EditorPrefs.GetString(P + "TimelineFolder", "");
+                return string.IsNullOrWhiteSpace(v) ? OutputFolder : v;
+            }
+            set => EditorPrefs.SetString(P + "TimelineFolder", value);
         }
     }
 }

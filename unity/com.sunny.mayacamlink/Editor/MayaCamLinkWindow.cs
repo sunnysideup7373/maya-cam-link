@@ -111,6 +111,26 @@ namespace MayaCamLink.Editor
                 }
             }
 
+            // ---------- キーの出力先 ----------
+            EditorGUILayout.Space(2);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                // AnimationClip
+                EditorGUILayout.LabelField("AnimationClip (.anim)", EditorStyles.boldLabel);
+                FolderField("Clip 保存先", "カメラの .anim を保存するフォルダ",
+                    MayaCamLinkSettings.ClipFolder, v => MayaCamLinkSettings.ClipFolder = v);
+
+                EditorGUILayout.Space(4);
+
+                // Timeline (別行)
+                MayaCamLinkSettings.CreateTimeline = EditorGUILayout.ToggleLeft(
+                    new GUIContent("Timeline を作成", "OFF: キー受信時に AnimationClip だけ作成"),
+                    MayaCamLinkSettings.CreateTimeline, EditorStyles.boldLabel);
+                using (new EditorGUI.DisabledScope(!MayaCamLinkSettings.CreateTimeline))
+                    FolderField("Timeline 保存先", "Timeline (.playable) を保存するフォルダ",
+                        MayaCamLinkSettings.TimelineFolder, v => MayaCamLinkSettings.TimelineFolder = v);
+            }
+
             // ---------- 情報 ----------
             if (MayaCamLinkProcessor.LastBakeInfo != "-")
                 EditorGUILayout.LabelField("◆ " + MayaCamLinkProcessor.LastBakeInfo, EditorStyles.wordWrappedMiniLabel);
@@ -136,6 +156,42 @@ namespace MayaCamLink.Editor
                 MayaCamLinkSettings.OutputFolder = EditorGUILayout.TextField("出力フォルダ", MayaCamLinkSettings.OutputFolder);
                 EditorGUI.indentLevel--;
             }
+        }
+
+        static string ToAbsolute(string assetPath)
+        {
+            var root = System.IO.Path.GetDirectoryName(Application.dataPath).Replace('\\', '/');
+            var abs = root + "/" + assetPath;
+            return System.IO.Directory.Exists(abs) ? abs : Application.dataPath;
+        }
+
+        /// <summary>ラベル + パス入力 + 選択ボタン の 1 行</summary>
+        static void FolderField(string label, string tip, string current, System.Action<string> setter)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(new GUIContent(label, tip), GUILayout.Width(96));
+                var edited = EditorGUILayout.DelayedTextField(current);
+                if (edited != current) SetFolder(edited, setter);
+                if (GUILayout.Button("選択…", GUILayout.Width(52)))
+                {
+                    var abs = EditorUtility.OpenFolderPanel(label + " (Assets 内)", ToAbsolute(current), "");
+                    if (!string.IsNullOrEmpty(abs)) SetFolder(abs, setter);
+                }
+            }
+        }
+
+        /// <summary>絶対パス / Assets 相対パスを受け取り、Assets 内なら設定</summary>
+        static void SetFolder(string path, System.Action<string> setter)
+        {
+            path = (path ?? "").Trim().Replace('\\', '/').TrimEnd('/');
+            var data = Application.dataPath.Replace('\\', '/');   // .../Project/Assets
+            if (path.StartsWith(data, System.StringComparison.OrdinalIgnoreCase))
+                path = "Assets" + path.Substring(data.Length);
+            if (path == "Assets" || path.StartsWith("Assets/"))
+                setter(path);
+            else
+                EditorUtility.DisplayDialog("Maya Cam Link", "プロジェクトの Assets フォルダ内を指定してください。", "OK");
         }
 
         bool Chip(string label, string tip, bool on)
