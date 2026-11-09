@@ -9,3 +9,7 @@ __pycache__/
 # OS
 Thumbs.db
 desktop.ini
+
+# テスト用の起動スクリプト (ローカルパスを含む)
+test/maya_startup.py
+test/maya_startup.mel
