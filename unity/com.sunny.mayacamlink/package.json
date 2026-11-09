@@ -1,0 +1,14 @@
+{
+  "name": "com.sunny.mayacamlink",
+  "version": "1.0.0",
+  "displayName": "Maya Cam Link",
+  "description": "Live link Maya cameras into Cinemachine 3 + Timeline, with physical lens and depth of field (URP / HDRP).",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.unity.cinemachine": "3.1.0",
+    "com.unity.timeline": "1.7.6"
+  },
+  "author": {
+    "name": "sunny"
+  }
+}

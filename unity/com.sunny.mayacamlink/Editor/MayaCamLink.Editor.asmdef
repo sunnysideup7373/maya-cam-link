@@ -1,0 +1,45 @@
+{
+    "name": "MayaCamLink.Editor",
+    "rootNamespace": "MayaCamLink.Editor",
+    "references": [
+        "MayaCamLink.Runtime",
+        "Unity.Cinemachine",
+        "Unity.Timeline",
+        "Unity.Timeline.Editor",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Unity.RenderPipelines.HighDefinition.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.render-pipelines.core",
+            "expression": "12.0.0",
+            "define": "MCL_SRP"
+        },
+        {
+            "name": "com.unity.render-pipelines.universal",
+            "expression": "12.0.0",
+            "define": "MCL_URP"
+        },
+        {
+            "name": "com.unity.render-pipelines.universal",
+            "expression": "17.0.0",
+            "define": "MCL_URP17"
+        },
+        {
+            "name": "com.unity.render-pipelines.high-definition",
+            "expression": "12.0.0",
+            "define": "MCL_HDRP"
+        }
+    ],
+    "noEngineReferences": false
+}

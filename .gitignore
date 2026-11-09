@@ -1,0 +1,11 @@
+# Unity テストプロジェクト (大容量・ローカル専用)
+test/TestProject_URP/
+
+# ログ・キャッシュ
+*.log
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+desktop.ini

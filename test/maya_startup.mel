@@ -1,0 +1,1 @@
+python("exec(open(r'C:/Users/sunny/Claude/maya_unity_cam/test/maya_startup.py', encoding='utf-8').read())");
