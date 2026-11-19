@@ -10,6 +10,9 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
+# 録画 (ローカル専用)
+recordings/
+
 # テスト用の起動スクリプト (ローカルパスを含む)
 test/maya_startup.py
 test/maya_startup.mel

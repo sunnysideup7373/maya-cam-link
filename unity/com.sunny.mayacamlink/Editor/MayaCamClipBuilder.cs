@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.Timeline;
 using UnityEngine;
@@ -11,25 +12,65 @@ namespace MayaCamLink.Editor
 {
     /// <summary>
     /// Maya のベイクデータを AnimationClip に書き出し、Timeline の AnimationTrack に配置する。
-    /// 再送信時は同じ .anim を上書き (GUID は変わらないので Timeline の参照も維持)。
+    /// 初回は Maya Cam Link ウィンドウで名前を決めて作成し、以降は同じ .anim を上書き
+    /// (GUID は変わらないので Timeline の参照も維持)。
     /// </summary>
     public static class MayaCamClipBuilder
     {
         const float ConstEps = 1e-5f;
 
-        public static AnimationClip Build(MayaCamBakePacket p, MayaCameraRig rig, PlayableDirector director)
+        public static string TrackName(string camera) => "Maya: " + camera;
+
+        /// <summary>Clip 名の設定から .anim のファイル名 (拡張子なし) を作る</summary>
+        public static string ClipFileName(string camera)
+        {
+            string n = MayaCamLinkSettings.ClipName;
+            n = Regex.Replace(n, @"\{cam\}", MayaCamLinkProcessor.Sanitize(camera), RegexOptions.IgnoreCase);
+            n = Regex.Replace(n, @"\{scene\}", MayaCamLinkProcessor.SceneName(), RegexOptions.IgnoreCase);
+            return SanitizeFileName(n, camera);
+        }
+
+        /// <summary>ファイル名として使えない文字を置き換え、拡張子を外す</summary>
+        public static string SanitizeFileName(string n, string camera)
+        {
+            n = n ?? "";
+            foreach (var c in System.IO.Path.GetInvalidFileNameChars()) n = n.Replace(c, '_');
+            n = n.Trim();
+            if (n.EndsWith(".anim", StringComparison.OrdinalIgnoreCase)) n = n.Substring(0, n.Length - 5);
+            n = n.TrimEnd('.', ' ');
+            return string.IsNullOrEmpty(n) ? MayaCamLinkProcessor.Sanitize(camera) : n;
+        }
+
+        /// <summary>カメラのトラックを探す (トラック名 → 無ければ Rig の Animator にバインドされたトラック)</summary>
+        public static AnimationTrack FindCameraTrack(PlayableDirector director, TimelineAsset timeline,
+            UnityEngine.Object binding, string camera)
+        {
+            string name = TrackName(camera);
+            AnimationTrack byBinding = null;
+            foreach (var t in timeline.GetOutputTracks().OfType<AnimationTrack>())
+            {
+                if (t.name == name) return t;
+                if (byBinding == null && binding && director && director.GetGenericBinding(t) == binding)
+                    byBinding = t;
+            }
+            return byBinding;
+        }
+
+        /// <summary>path (Assets/....anim) に書き出す。既にあれば中身だけ上書き</summary>
+        public static AnimationClip Build(MayaCamBakePacket p, MayaCameraRig rig, PlayableDirector director, string path)
         {
             var frames = p.frames;
             int n = frames.Length;
             float fps = Mathf.Max(1f, p.fps);
 
             // ---- clip asset ----
-            string folder = MayaCamLinkProcessor.EnsureFolder(MayaCamLinkSettings.ClipFolder);
-            string safe = MayaCamLinkProcessor.Sanitize(p.camera);
-            string path = $"{folder}/{MayaCamLinkProcessor.SceneName()}_{safe}.anim";
             var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
             bool isNew = clip == null;
-            if (isNew) clip = new AnimationClip { name = safe };
+            if (isNew)
+            {
+                MayaCamLinkProcessor.EnsureFolder(System.IO.Path.GetDirectoryName(path).Replace('\\', '/'));
+                clip = new AnimationClip { name = System.IO.Path.GetFileNameWithoutExtension(path) };
+            }
             else clip.ClearCurves();
             clip.frameRate = fps;
 
@@ -89,31 +130,37 @@ namespace MayaCamLink.Editor
             // ---- Timeline ----
             if (director && director.playableAsset is TimelineAsset timeline)
             {
-                timeline.editorSettings.frameRate = fps;
-                string trackName = "Maya: " + p.camera;
-                var track = timeline.GetOutputTracks().OfType<AnimationTrack>()
-                    .FirstOrDefault(t => t.name == trackName);
-                if (track == null) track = timeline.CreateTrack<AnimationTrack>(null, trackName);
-                track.trackOffset = TrackOffset.ApplySceneOffsets;
-
-                var tc = track.GetClips().FirstOrDefault();
-                if (tc == null) tc = track.CreateClip(clip);
-                else if (tc.asset is AnimationPlayableAsset apa) apa.clip = clip;
-
-                tc.displayName = p.camera;
-                tc.start = 0;
-                tc.clipIn = 0;
-                tc.duration = Math.Max(clip.length, 1.0 / fps);
-
+                // 既存の Timeline に「Maya: カメラ名」トラックを追加 (他のトラックには触らない)
                 var animator = rig.GetComponent<Animator>();
                 if (!animator) animator = Undo.AddComponent<Animator>(rig.gameObject);
+                var track = FindCameraTrack(director, timeline, animator, p.camera);
+                if (track == null) track = timeline.CreateTrack<AnimationTrack>(null, TrackName(p.camera));
+                track.trackOffset = TrackOffset.ApplySceneOffsets;
+
+                double len = Math.Max(clip.length, 1.0 / fps);
+                var tc = track.GetClips().FirstOrDefault();
+                if (tc == null)
+                {
+                    tc = track.CreateClip(clip);
+                    tc.start = 0;
+                    tc.clipIn = 0;
+                    tc.duration = len;
+                }
+                else
+                {
+                    if (tc.asset is AnimationPlayableAsset apa) apa.clip = clip;
+                    // Timeline 上で動かした位置 (start) と先頭トリム (clipIn) はそのまま
+                    tc.duration = Math.Max(len - tc.clipIn, 1.0 / fps);
+                }
+                tc.displayName = clip.name;
                 director.SetGenericBinding(track, animator);
 
                 EditorUtility.SetDirty(timeline);
                 EditorUtility.SetDirty(director);
                 AssetDatabase.SaveAssets();
                 director.RebuildGraph();
-                TimelineEditor.Refresh(RefreshReason.ContentsModified);
+                // トラックを追加した時は ContentsAddedOrRemoved でないと Timeline ウィンドウに表示されない
+                TimelineEditor.Refresh(RefreshReason.ContentsAddedOrRemoved | RefreshReason.ContentsModified);
             }
             else
             {

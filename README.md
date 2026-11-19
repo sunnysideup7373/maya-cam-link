@@ -10,10 +10,24 @@ Maya のカメラを Unity の Cinemachine + Timeline にリアルタイムで�
 ## インストール
 
 ### Unity
-1. **Window → Package Manager → ＋ → Install package from disk…**
-   で `unity/com.sunny.mayacamlink/package.json` を選択
+1. **Window → Package Manager → ＋ → Install package from git URL…** に次を入力
+   ```
+   https://github.com/sunnysideup7373/maya-cam-link.git?path=/unity/com.sunny.mayacamlink
+   ```
 2. **Edit → Preferences → General → Interaction Mode** を **No Throttling** に変更
 3. **Window → Maya Cam Link** を開く
+
+#### プロジェクトを Git などで共有する場合
+**Install package from disk** で入れると `Packages/manifest.json` に自分の PC のパス (`file:...`) が書かれ、
+他の人がプロジェクトを開くとパッケージが見つからずエラーになります。
+その場合は Maya Cam Link ウィンドウに警告が出るので、どちらかを押してください。
+
+| ボタン | 内容 | 相手に必要なもの |
+|---|---|---|
+| **プロジェクトに埋め込む** | `Packages/com.sunny.mayacamlink` にコピーし、プロジェクトと一緒にコミット | なし |
+| **GitHub から参照** | 上の git URL 参照に切り替え (`packages-lock.json` で全員同じバージョンに固定) | Git |
+
+※ どちらの場合も Cinemachine と Timeline は Package Manager が自動で入れます。
 
 ### Maya
 `maya/maya_cam_link_install.py` をビューポートに**ドラッグ & ドロップ**
@@ -42,3 +56,5 @@ Test-NetConnection 192.168.1.23 -Port 7788
 
 - このフォルダを移動した場合は、Maya にもう一度ドロップしてください。
 - Unity 起動後、一度 Unity のウィンドウをクリックしてから Maya で接続してください。
+- カメラを初めて受信した時は、Unity の Maya Cam Link ウィンドウで Clip 名を決めて **作成** を押してください。以降は Maya の変更が同じ Clip に自動で反映されます。
+- Timeline に入れる場合は、Unity の Maya Cam Link ウィンドウで **追加先** に Timeline を指定してください（未指定の間は AnimationClip だけ作成されます）。

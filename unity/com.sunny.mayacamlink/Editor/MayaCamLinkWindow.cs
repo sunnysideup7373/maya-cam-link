@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -32,6 +34,42 @@ namespace MayaCamLink.Editor
                 _lastRepaint = EditorApplication.timeSinceStartup;
                 Repaint();
             }
+        }
+
+        /// <summary>manifest がローカルパス参照の時: 共有相手の PC でパッケージが見つからないので警告</summary>
+        void PackageSourceGUI()
+        {
+            if (!MayaCamLinkPackageSource.ShowWarning) return;
+            bool embed = false, git = false, hide = false;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label(EditorGUIUtility.IconContent("console.warnicon.sml"), GUILayout.Width(18));
+                    GUILayout.Label("パッケージがローカルパスで参照されています。\n" +
+                                    "このプロジェクトを Git で共有すると、相手の PC では見つかりません。",
+                        EditorStyles.wordWrappedMiniLabel);
+                    hide = GUILayout.Button(new GUIContent("×", "このプロジェクトでは表示しない"),
+                        EditorStyles.miniButton, GUILayout.Width(20));
+                }
+                EditorGUILayout.LabelField(MayaCamLinkPackageSource.Reference, EditorStyles.miniLabel);
+                using (new EditorGUI.DisabledScope(MayaCamLinkPackageSource.Busy))
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    embed = GUILayout.Button(new GUIContent("プロジェクトに埋め込む",
+                        "Packages/ にコピーしてプロジェクトと一緒にコミット (相手は何もしなくて良い)"));
+                    git = GUILayout.Button(new GUIContent(MayaCamLinkPackageSource.Busy ? "切り替え中…" : "GitHub から参照",
+                        "GitHub の URL 参照に切り替え (相手の PC に Git が必要)"));
+                }
+            }
+            if (hide) MayaCamLinkPackageSource.ShowWarning = false;
+            if (embed &&
+                EditorUtility.DisplayDialog("Maya Cam Link",
+                    "パッケージを Packages/com.sunny.mayacamlink にコピーし、manifest.json の参照を外します。\n" +
+                    "以後はプロジェクトと一緒にコミットしてください。", "埋め込む", "キャンセル"))
+                MayaCamLinkPackageSource.Embed();
+            if (git) MayaCamLinkPackageSource.SwitchToGit();
+            if (hide || embed || git) GUIUtility.ExitGUI();
         }
 
         void Styles()
@@ -76,6 +114,7 @@ namespace MayaCamLink.Editor
             }
             if (!string.IsNullOrEmpty(MayaCamLinkServer.LastError))
                 EditorGUILayout.HelpBox(MayaCamLinkServer.LastError, MessageType.Error);
+            PackageSourceGUI();
 
             // ---------- 同期トグル ----------
             using (new EditorGUILayout.HorizontalScope())
@@ -88,15 +127,9 @@ namespace MayaCamLink.Editor
             // ---------- ツール ----------
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button(new GUIContent("▤ Timeline", "Timeline を選択して開く"), _chip))
-                {
-                    var dir = MayaCamLinkProcessor.FindDirector(false);
-                    if (dir)
-                    {
-                        Selection.activeGameObject = dir.gameObject;
-                        EditorApplication.ExecuteMenuItem("Window/Sequencing/Timeline");
-                    }
-                }
+                using (new EditorGUI.DisabledScope(!MayaCamLinkProcessor.TargetDirector))
+                    if (GUILayout.Button(new GUIContent("▤ Timeline", "追加先の Timeline を選択して開く"), _chip))
+                        OpenTimeline(MayaCamLinkProcessor.TargetDirector);
                 if (GUILayout.Button(new GUIContent("↩ 解除", "ライブ上書きを解除して Timeline に戻す"), _chip))
                     MayaCamLinkProcessor.ClearAllLiveOverrides();
                 if (GUILayout.Button(new GUIContent("◎ セットアップ", "メインカメラ / Brain / ポストプロセスを設定"), _chip))
@@ -111,24 +144,28 @@ namespace MayaCamLink.Editor
                 }
             }
 
+            // ---------- 初回: Clip の作成待ち ----------
+            PendingGUI();
+
             // ---------- キーの出力先 ----------
             EditorGUILayout.Space(2);
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 // AnimationClip
                 EditorGUILayout.LabelField("AnimationClip (.anim)", EditorStyles.boldLabel);
+                ClipNameField();
                 FolderField("Clip 保存先", "カメラの .anim を保存するフォルダ",
                     MayaCamLinkSettings.ClipFolder, v => MayaCamLinkSettings.ClipFolder = v);
 
                 EditorGUILayout.Space(4);
 
                 // Timeline (別行)
-                MayaCamLinkSettings.CreateTimeline = EditorGUILayout.ToggleLeft(
-                    new GUIContent("Timeline を作成", "OFF: キー受信時に AnimationClip だけ作成"),
-                    MayaCamLinkSettings.CreateTimeline, EditorStyles.boldLabel);
-                using (new EditorGUI.DisabledScope(!MayaCamLinkSettings.CreateTimeline))
-                    FolderField("Timeline 保存先", "Timeline (.playable) を保存するフォルダ",
-                        MayaCamLinkSettings.TimelineFolder, v => MayaCamLinkSettings.TimelineFolder = v);
+                MayaCamLinkSettings.UseTimeline = EditorGUILayout.ToggleLeft(
+                    new GUIContent("Timeline に追加",
+                        "指定した Timeline にカメラのトラックを追加し、再生ヘッドを Maya と同期\nOFF: AnimationClip だけ作成"),
+                    MayaCamLinkSettings.UseTimeline, EditorStyles.boldLabel);
+                using (new EditorGUI.DisabledScope(!MayaCamLinkSettings.UseTimeline))
+                    TimelineTargetField();
             }
 
             // ---------- 情報 ----------
@@ -152,7 +189,6 @@ namespace MayaCamLink.Editor
                 }
                 MayaCamLinkSettings.AutoStart = EditorGUILayout.Toggle("自動開始", MayaCamLinkSettings.AutoStart);
                 MayaCamLinkSettings.AutoCreateRig = EditorGUILayout.Toggle("Rig 自動作成", MayaCamLinkSettings.AutoCreateRig);
-                MayaCamLinkSettings.DirectorName = EditorGUILayout.TextField("Timeline 名", MayaCamLinkSettings.DirectorName);
                 MayaCamLinkSettings.OutputFolder = EditorGUILayout.TextField("出力フォルダ", MayaCamLinkSettings.OutputFolder);
                 EditorGUI.indentLevel--;
             }
@@ -165,7 +201,177 @@ namespace MayaCamLink.Editor
             return System.IO.Directory.Exists(abs) ? abs : Application.dataPath;
         }
 
-        /// <summary>ラベル + パス入力 + 選択ボタン の 1 行</summary>
+        static readonly Dictionary<string, string> _pendingNames = new Dictionary<string, string>();
+
+        /// <summary>初めて受信したカメラ: 名前を決めて「作成」(以降は自動で上書き)</summary>
+        void PendingGUI()
+        {
+            var pending = MayaCamLinkProcessor.Pending;
+            if (pending.Count == 0) return;
+            string dismiss = null, create = null;
+            foreach (var cam in pending.Keys.ToList())
+            {
+                var p = pending[cam];
+                var bg = GUI.backgroundColor;
+                GUI.backgroundColor = new Color(1f, 0.82f, 0.35f);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    GUI.backgroundColor = bg;
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.Label($"◆ {cam}   {p.frames.Length} f   未作成", EditorStyles.boldLabel);
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button(new GUIContent("×", "今は作成しない (次に受信すると再表示)"), GUILayout.Width(22)))
+                            dismiss = cam;
+                    }
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.LabelField(new GUIContent("Clip 名", "このカメラの AnimationClip の名前 (作成後は自動で上書き)"),
+                            GUILayout.Width(96));
+                        if (!_pendingNames.TryGetValue(cam, out var name)) name = MayaCamClipBuilder.ClipFileName(cam);
+                        _pendingNames[cam] = EditorGUILayout.TextField(name);
+                        GUILayout.Label(".anim", EditorStyles.miniLabel, GUILayout.Width(34));
+                        GUI.backgroundColor = Green;
+                        if (GUILayout.Button(new GUIContent("作成", "Clip を作成し、以降は Maya の変更を自動で反映"),
+                                GUILayout.Width(52)))
+                            create = cam;
+                        GUI.backgroundColor = bg;
+                    }
+                }
+            }
+            // レイアウトが崩れないよう、描画が終わってから実行
+            if (dismiss != null)
+            {
+                MayaCamLinkProcessor.DismissPending(dismiss);
+                _pendingNames.Remove(dismiss);
+                GUIUtility.ExitGUI();
+            }
+            if (create != null)
+            {
+                CreatePending(create, _pendingNames[create]);
+                GUIUtility.ExitGUI();
+            }
+        }
+
+        static void CreatePending(string cam, string name)
+        {
+            var path = MayaCamLinkProcessor.NewClipPath(cam, name);
+            if (AssetDatabase.LoadAssetAtPath<AnimationClip>(path) != null &&
+                !EditorUtility.DisplayDialog("Maya Cam Link",
+                    $"{System.IO.Path.GetFileName(path)} は既にあります。上書きしますか？", "上書き", "キャンセル"))
+                return;
+            MayaCamLinkProcessor.CreatePendingClip(cam, name);
+            _pendingNames.Remove(cam);
+            GUI.FocusControl(null);
+        }
+
+        /// <summary>Clip 初期名 ({scene} / {cam} を置き換え) + 実際のファイル名のプレビュー</summary>
+        static void ClipNameField()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(new GUIContent("Clip 初期名",
+                    "新しいカメラの Clip 名の初期値 ({scene} = シーン名、{cam} = Maya のカメラ名)\n作成済みのカメラは、作成した Clip に上書きされます"),
+                    GUILayout.Width(96));
+                var cur = MayaCamLinkSettings.ClipName;
+                var edited = EditorGUILayout.DelayedTextField(cur);
+                if (edited != cur) MayaCamLinkSettings.ClipName = edited;
+                if (GUILayout.Button(new GUIContent("既定", MayaCamLinkSettings.DefaultClipName), GUILayout.Width(52)))
+                {
+                    MayaCamLinkSettings.ClipName = MayaCamLinkSettings.DefaultClipName;
+                    GUI.FocusControl(null);
+                }
+            }
+            string cam = MayaCamLinkProcessor.LastCamera != "-" ? MayaCamLinkProcessor.LastCamera : "camera1";
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Space(100);
+                GUILayout.Label("→ " + MayaCamClipBuilder.ClipFileName(cam) + ".anim", EditorStyles.miniLabel);
+            }
+        }
+
+        /// <summary>追加先 Timeline の指定: 欄 + 選択中を使う + 新規作成</summary>
+        static void TimelineTargetField()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(new GUIContent("追加先", "カメラのトラックを追加し、再生ヘッドを同期する Timeline"),
+                    GUILayout.Width(96));
+                var cur = MayaCamLinkProcessor.TargetDirector;
+                var picked = (UnityEngine.Playables.PlayableDirector)EditorGUILayout.ObjectField(
+                    cur, typeof(UnityEngine.Playables.PlayableDirector), true);
+                if (picked != cur) MayaCamLinkProcessor.TargetDirector = picked;
+                if (GUILayout.Button(new GUIContent("選択中", "Hierarchy で選択中 / Timeline ウィンドウで開いている Timeline を使う"),
+                        GUILayout.Width(52)))
+                {
+                    var sel = MayaCamLinkProcessor.PickSelectedDirector();
+                    if (sel) MayaCamLinkProcessor.TargetDirector = sel;
+                    else EditorUtility.DisplayDialog("Maya Cam Link",
+                        "Timeline (PlayableDirector) を Hierarchy で選択するか、Timeline ウィンドウで開いてください。", "OK");
+                }
+                if (GUILayout.Button(new GUIContent("新規…", "新しい Timeline を作成して追加先にする"), GUILayout.Width(52)))
+                {
+                    var folder = MayaCamLinkProcessor.EnsureFolder(MayaCamLinkSettings.TimelineFolder);
+                    var path = EditorUtility.SaveFilePanelInProject("Timeline を作成",
+                        MayaCamLinkProcessor.SceneName() + "_MayaCamLink", "playable", "", folder);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        MayaCamLinkSettings.TimelineFolder = System.IO.Path.GetDirectoryName(path).Replace('\\', '/');
+                        OpenTimeline(MayaCamLinkProcessor.CreateTimeline(path));
+                    }
+                }
+            }
+
+            var dir = MayaCamLinkProcessor.TargetDirector;
+            if (!dir)
+                EditorGUILayout.HelpBox("Timeline を指定してください (未指定の間は AnimationClip だけ作成)", MessageType.None);
+            else if (!(dir.playableAsset is UnityEngine.Timeline.TimelineAsset))
+                EditorGUILayout.HelpBox("この PlayableDirector に Timeline アセットがありません", MessageType.Warning);
+        }
+
+        static void OpenTimeline(UnityEngine.Playables.PlayableDirector dir)
+        {
+            if (!dir) return;
+            Selection.activeGameObject = dir.gameObject;
+            EditorApplication.ExecuteMenuItem("Window/Sequencing/Timeline");
+        }
+
+        /// <summary>フォルダを Project ウィンドウで表示 (Shift+クリック: エクスプローラー)</summary>
+        static void RevealFolder(string assetFolder)
+        {
+            assetFolder = MayaCamLinkProcessor.EnsureFolder(assetFolder);
+            if (Event.current != null && Event.current.shift)
+            {
+                EditorUtility.RevealInFinder(ToAbsolute(assetFolder));
+                return;
+            }
+            var folderObj = AssetDatabase.LoadAssetAtPath<Object>(assetFolder);
+            if (!folderObj) return;
+            EditorUtility.FocusProjectWindow();
+            // 直下の最新ファイルを選択すると、そのフォルダの中身が開く
+            string latest = null;
+            var latestTime = System.DateTime.MinValue;
+            foreach (var guid in AssetDatabase.FindAssets("", new[] { assetFolder }))
+            {
+                var p = AssetDatabase.GUIDToAssetPath(guid);
+                if (AssetDatabase.IsValidFolder(p)) continue;
+                if (System.IO.Path.GetDirectoryName(p).Replace('\\', '/') != assetFolder) continue;
+                var time = System.IO.File.GetLastWriteTimeUtc(p);
+                if (time > latestTime) { latestTime = time; latest = p; }
+            }
+            if (latest != null)
+            {
+                var obj = AssetDatabase.LoadAssetAtPath<Object>(latest);
+                Selection.activeObject = obj;
+                EditorGUIUtility.PingObject(obj);
+            }
+            else
+            {
+                AssetDatabase.OpenAsset(folderObj);  // 空のフォルダはそのまま開く
+            }
+        }
+
+        /// <summary>ラベル + パス入力 + 選択ボタン + 表示ボタン の 1 行</summary>
         static void FolderField(string label, string tip, string current, System.Action<string> setter)
         {
             using (new EditorGUILayout.HorizontalScope())
@@ -178,6 +384,9 @@ namespace MayaCamLink.Editor
                     var abs = EditorUtility.OpenFolderPanel(label + " (Assets 内)", ToAbsolute(current), "");
                     if (!string.IsNullOrEmpty(abs)) SetFolder(abs, setter);
                 }
+                if (GUILayout.Button(new GUIContent("表示", "Project ウィンドウでフォルダを表示\nShift+クリック: エクスプローラーで開く"),
+                        GUILayout.Width(52)))
+                    RevealFolder(current);
             }
         }
 

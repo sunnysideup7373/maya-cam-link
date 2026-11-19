@@ -35,6 +35,8 @@ namespace MayaCamLink
         [Tooltip("Maya のカメラ名 (照合用)")]
         public string mayaCameraName;
         public CinemachineCamera cmCamera;
+        [Tooltip("Maya のキーを書き込む AnimationClip。\n空にすると、次に受信した時に Maya Cam Link ウィンドウで名前を決めて作成")]
+        public AnimationClip bakedClip;
 
         [Header("レンズ")]
         [Tooltip("焦点距離 mm")] public float focalLength = 35f;

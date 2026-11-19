@@ -8,6 +8,7 @@ using UnityEditor.Timeline;
 using UnityEngine;
 using UnityEngine.Playables;
 using UnityEngine.Timeline;
+using System.Linq;
 #if MCL_SRP
 using UnityEngine.Rendering;
 #endif
@@ -47,6 +48,10 @@ namespace MayaCamLink.Editor
         {
             EditorApplication.update += Update;
             EditorApplication.playModeStateChanged += _ => ClearAllLiveOverrides();
+            // 保存後・再コンパイル前に追加先 Timeline の ID を更新 (未保存時の ID は復元できないため)
+            EditorSceneManager.sceneSaved += _ => RefreshStoredTarget();
+            AssemblyReloadEvents.beforeAssemblyReload += RefreshStoredTarget;
+            EditorSceneManager.activeSceneChangedInEditMode += (_, __) => { _target = null; _lastResolve = -10; };
         }
 
         static void Update()
@@ -115,10 +120,11 @@ namespace MayaCamLink.Editor
 
             if (MayaCamLinkSettings.SyncTime && p.syncTime != 0)
             {
-                var dir = FindDirector(false);
+                var dir = SyncDirector;
                 if (dir && dir.playableAsset)
                 {
-                    double t = Math.Max(0.0, (p.frame - p.start) / Math.Max(1f, p.fps));
+                    // Timeline 上でクリップを移動・トリムしていても、そのクリップの位置に合わせる
+                    double t = Math.Max(0.0, ClipOffset(dir, rig, p.camera) + (p.frame - p.start) / Math.Max(1f, p.fps));
                     if (Math.Abs(dir.time - t) > 1e-6)
                     {
                         dir.time = t;
@@ -137,7 +143,7 @@ namespace MayaCamLink.Editor
         static void ReleaseOverrideIfUserScrubbed()
         {
             if (double.IsNaN(_syncedDirectorTime)) return;
-            var dir = FindDirector(false);
+            var dir = SyncDirector;
             if (!dir) return;
             if (Math.Abs(dir.time - _syncedDirectorTime) > 0.5 / Math.Max(1f, LastFps))
             {
@@ -150,21 +156,50 @@ namespace MayaCamLink.Editor
             _syncedDirectorTime = double.NaN;
             foreach (var r in AllRigs())
                 r.ClearLiveOverride();
-            var dir = FindDirector(false);
+            var dir = SyncDirector;
             if (dir && dir.playableAsset && !EditorApplication.isPlaying) dir.Evaluate();
             RepaintAll();
         }
 
+        /// <summary>Maya の時間 0 (再生開始フレーム) が Timeline 上のどの時刻になるか</summary>
+        static double ClipOffset(PlayableDirector dir, MayaCameraRig rig, string camera)
+        {
+            if (!(dir.playableAsset is TimelineAsset tl)) return 0;
+            var anim = rig ? rig.GetComponent<Animator>() : null;
+            var track = MayaCamClipBuilder.FindCameraTrack(dir, tl, anim, camera);
+            var tc = track != null ? track.GetClips().FirstOrDefault() : null;
+            return tc != null ? tc.start - tc.clipIn : 0;
+        }
+
         public static void RepaintAll()
         {
+            UpdateBrainsInBackground();
             EditorApplication.QueuePlayerLoopUpdate();
             SceneView.RepaintAll();
             UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
         }
 
+        /// <summary>
+        /// Unity が非アクティブ (Maya を操作中) の間は player loop が止まり、
+        /// CinemachineBrain が Main Camera を動かさないため Game ビューが更新されない。ここで手動で更新する。
+        /// </summary>
+        static void UpdateBrainsInBackground()
+        {
+            if (UnityEditorInternal.InternalEditorUtility.isApplicationActive) return;
+            for (int i = 0; i < CinemachineBrain.ActiveBrainCount; i++)
+            {
+                var b = CinemachineBrain.GetActiveBrain(i);
+                if (b) b.ManualUpdate();
+            }
+        }
+
         // ------------------------------------------------------------------
         // Bake
         // ------------------------------------------------------------------
+        // 初回受信で Clip がまだ無いカメラ (ウィンドウで名前を決めて「作成」するまで保留)
+        static readonly Dictionary<string, MayaCamBakePacket> _pending = new Dictionary<string, MayaCamBakePacket>();
+        public static IReadOnlyDictionary<string, MayaCamBakePacket> Pending => _pending;
+
         public static void HandleBake(MayaCamBakePacket p)
         {
             if (p?.frames == null || p.frames.Length == 0) return;
@@ -172,15 +207,56 @@ namespace MayaCamLink.Editor
             LastResH = p.resH;
             var rig = FindRig(p.camera, true);
             if (!rig) return;
-            // 「Timeline を作成」が OFF の時は AnimationClip だけ作成 (Timeline には触らない)
-            bool makeTimeline = MayaCamLinkSettings.CreateTimeline;
-            var dir = FindDirector(makeTimeline);
-            var clip = MayaCamClipBuilder.Build(p, rig, makeTimeline ? dir : null);
+
+            string path = rig.bakedClip ? AssetDatabase.GetAssetPath(rig.bakedClip) : null;
+            if (string.IsNullOrEmpty(path))
+            {
+                _pending[p.camera] = p;
+                LastBakeInfo = $"{p.camera}  {p.frames.Length} f  → 未作成   ({DateTime.Now:HH:mm:ss})";
+                RepaintAll();
+                return;
+            }
+            _pending.Remove(p.camera);
+            Bake(p, rig, path);
+        }
+
+        /// <summary>保留中のカメラの Clip を作成。以降はこの Clip に自動で上書きする</summary>
+        public static AnimationClip CreatePendingClip(string camera, string fileName)
+        {
+            if (!_pending.TryGetValue(camera, out var p)) return null;
+            var rig = FindRig(camera, true);
+            if (!rig) return null;
+            _pending.Remove(camera);
+            var clip = Bake(p, rig, NewClipPath(camera, fileName));
+            Undo.RecordObject(rig, "Maya Cam Link Clip");
+            rig.bakedClip = clip;
+            EditorUtility.SetDirty(rig);
+            EditorSceneManager.MarkSceneDirty(rig.gameObject.scene);
+            return clip;
+        }
+
+        public static void DismissPending(string camera) => _pending.Remove(camera);
+
+        /// <summary>新しい Clip の保存パス (Clip 保存先 / 名前.anim)</summary>
+        public static string NewClipPath(string camera, string fileName) =>
+            $"{MayaCamLinkSettings.ClipFolder.Replace('\\', '/').TrimEnd('/')}/{MayaCamClipBuilder.SanitizeFileName(fileName, camera)}.anim";
+
+        static AnimationClip Bake(MayaCamBakePacket p, MayaCameraRig rig, string path)
+        {
+            // 「Timeline に追加」が OFF / 追加先が未指定の時は AnimationClip だけ
+            var dir = SyncDirector;
+            if (dir && !(dir.playableAsset is TimelineAsset))
+            {
+                Debug.LogWarning($"[MayaCamLink] {dir.name} に Timeline アセットがないため、AnimationClip だけ更新しました。");
+                dir = null;
+            }
+            var clip = MayaCamClipBuilder.Build(p, rig, dir, path);
             LastBakeInfo = $"{p.camera}  {p.frames.Length} f  @{p.fps:0.###}fps  → {AssetDatabase.GetAssetPath(clip)}   ({DateTime.Now:HH:mm:ss})";
 
             // ライブ状態は引き続き有効 (Maya の現在フレームの値)。再評価してから上書き
             if (dir && dir.playableAsset) dir.Evaluate();
             RepaintAll();
+            return clip;
         }
 
         public static void ImportJsonFile(string path)
@@ -348,36 +424,95 @@ namespace MayaCamLink.Editor
             return cam;
         }
 
-        public static PlayableDirector FindDirector(bool create)
-        {
-            string name = MayaCamLinkSettings.DirectorName;
-            var go = GameObject.Find(name);
-            PlayableDirector dir = go ? go.GetComponent<PlayableDirector>() : null;
-            if (!dir && !create) return null;
+        // ------------------------------------------------------------------
+        // 追加先 Timeline (ユーザーが指定した PlayableDirector)
+        // ------------------------------------------------------------------
+        static PlayableDirector _target;
+        static double _lastResolve = -10;
 
-            if (!go)
+        /// <summary>指定された Timeline。シーンを開き直しても GlobalObjectId から復元する</summary>
+        public static PlayableDirector TargetDirector
+        {
+            get
             {
-                go = new GameObject(name);
-                Undo.RegisterCreatedObjectUndo(go, "Create Maya Cam Link Timeline");
+                if (_target) return _target;
+                string id = MayaCamLinkSettings.TargetDirectorId;
+                string path = MayaCamLinkSettings.TargetDirectorPath;
+                if (string.IsNullOrEmpty(id) && string.IsNullOrEmpty(path)) return null;
+                // 見つからない時に毎フレーム探さないよう間引く
+                double now = EditorApplication.timeSinceStartup;
+                if (now - _lastResolve < 1.0) return null;
+                _lastResolve = now;
+                if (GlobalObjectId.TryParse(id, out var gid))
+                    _target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(gid) as PlayableDirector;
+                // 未保存のシーン / オブジェクトは ID で戻せないので、シーン + 階層パスで探す
+                if (!_target && !string.IsNullOrEmpty(path))
+                    _target = FindDirectorByPath(path);
+                return _target;
             }
-            if (!dir)
+            set
             {
-                dir = go.AddComponent<PlayableDirector>();
-                dir.playOnAwake = true;
+                _target = value;
+                _lastResolve = -10;
+                StoreTarget();
             }
-            if (!(dir.playableAsset is TimelineAsset))
+        }
+
+        static void StoreTarget()
+        {
+            MayaCamLinkSettings.TargetDirectorId = _target ? GlobalObjectId.GetGlobalObjectIdSlow(_target).ToString() : "";
+            MayaCamLinkSettings.TargetDirectorPath = _target ? DirectorPath(_target) : "";
+        }
+
+        static string DirectorPath(PlayableDirector d) =>
+            d.gameObject.scene.path + "|" + AnimationUtility.CalculateTransformPath(d.transform, null);
+
+        static PlayableDirector FindDirectorByPath(string path)
+        {
+            foreach (var d in Resources.FindObjectsOfTypeAll<PlayableDirector>())
             {
-                string folder = EnsureFolder(MayaCamLinkSettings.TimelineFolder);
-                string path = $"{folder}/{SceneName()}_MayaCamLink.playable";
-                var tl = AssetDatabase.LoadAssetAtPath<TimelineAsset>(path);
-                if (!tl)
-                {
-                    tl = ScriptableObject.CreateInstance<TimelineAsset>();
-                    AssetDatabase.CreateAsset(tl, path);
-                }
-                dir.playableAsset = tl;
-                EditorSceneManager.MarkSceneDirty(go.scene);
+                if (!d.gameObject.scene.IsValid() || EditorUtility.IsPersistent(d)) continue;
+                if (DirectorPath(d) == path) return d;
             }
+            return null;
+        }
+
+        static void RefreshStoredTarget()
+        {
+            if (_target) StoreTarget();
+        }
+
+        /// <summary>同期・追加に使う Timeline (「Timeline に追加」が OFF なら null)</summary>
+        public static PlayableDirector SyncDirector =>
+            MayaCamLinkSettings.UseTimeline ? TargetDirector : null;
+
+        /// <summary>Timeline ウィンドウで開いている / Hierarchy で選択中の Timeline</summary>
+        public static PlayableDirector PickSelectedDirector()
+        {
+            var go = Selection.activeGameObject;
+            var sel = go ? go.GetComponent<PlayableDirector>() : null;
+            if (sel) return sel;
+            return TimelineEditor.inspectedDirector;
+        }
+
+        /// <summary>新しい Timeline を作成して追加先に設定</summary>
+        public static PlayableDirector CreateTimeline(string assetPath)
+        {
+            var tl = AssetDatabase.LoadAssetAtPath<TimelineAsset>(assetPath);
+            if (!tl)
+            {
+                tl = ScriptableObject.CreateInstance<TimelineAsset>();
+                tl.editorSettings.frameRate = Math.Max(1f, LastFps);
+                AssetDatabase.CreateAsset(tl, assetPath);
+                AssetDatabase.SaveAssets();
+            }
+            var go = new GameObject(Path.GetFileNameWithoutExtension(assetPath));
+            Undo.RegisterCreatedObjectUndo(go, "Create Maya Cam Link Timeline");
+            var dir = go.AddComponent<PlayableDirector>();
+            dir.playOnAwake = true;
+            dir.playableAsset = tl;
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            TargetDirector = dir;
             return dir;
         }
 

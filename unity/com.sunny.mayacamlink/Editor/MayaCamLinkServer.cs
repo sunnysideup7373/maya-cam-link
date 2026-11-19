@@ -155,21 +155,39 @@ namespace MayaCamLink.Editor
             get => EditorPrefs.GetBool(P + "AcceptBake", true);
             set => EditorPrefs.SetBool(P + "AcceptBake", value);
         }
-        /// <summary>false: キーを受け取っても AnimationClip だけ作成し、Timeline は作らない</summary>
-        public static bool CreateTimeline
+        /// <summary>true: 指定した Timeline にカメラのトラックを追加し、再生ヘッドを同期する</summary>
+        public static bool UseTimeline
         {
-            get => EditorPrefs.GetBool(P + "CreateTimeline", true);
-            set => EditorPrefs.SetBool(P + "CreateTimeline", value);
+            get => EditorPrefs.GetBool(P + "UseTimeline", true);
+            set => EditorPrefs.SetBool(P + "UseTimeline", value);
+        }
+        /// <summary>追加先 Timeline (PlayableDirector) の GlobalObjectId</summary>
+        public static string TargetDirectorId
+        {
+            get => EditorPrefs.GetString(P + "TargetDirectorId", "");
+            set => EditorPrefs.SetString(P + "TargetDirectorId", value);
+        }
+        /// <summary>追加先 Timeline の「シーンパス|階層パス」(ID で見つからない時の予備)</summary>
+        public static string TargetDirectorPath
+        {
+            get => EditorPrefs.GetString(P + "TargetDirectorPath", "");
+            set => EditorPrefs.SetString(P + "TargetDirectorPath", value);
+        }
+        public const string DefaultClipName = "{scene}_{cam}";
+        /// <summary>AnimationClip のファイル名。{scene} = シーン名, {cam} = Maya のカメラ名</summary>
+        public static string ClipName
+        {
+            get
+            {
+                var v = EditorPrefs.GetString(P + "ClipName", DefaultClipName);
+                return string.IsNullOrWhiteSpace(v) ? DefaultClipName : v;
+            }
+            set => EditorPrefs.SetString(P + "ClipName", value);
         }
         public static bool AutoCreateRig
         {
             get => EditorPrefs.GetBool(P + "AutoCreateRig", true);
             set => EditorPrefs.SetBool(P + "AutoCreateRig", value);
-        }
-        public static string DirectorName
-        {
-            get => EditorPrefs.GetString(P + "DirectorName", "MayaCamLink_Timeline");
-            set => EditorPrefs.SetString(P + "DirectorName", value);
         }
         public static string OutputFolder
         {
@@ -186,7 +204,7 @@ namespace MayaCamLink.Editor
             }
             set => EditorPrefs.SetString(P + "ClipFolder", value);
         }
-        /// <summary>Timeline (.playable) の保存先。空なら 出力フォルダ</summary>
+        /// <summary>「新規」で作る Timeline (.playable) の既定の保存先。空なら 出力フォルダ</summary>
         public static string TimelineFolder
         {
             get
